@@ -75,6 +75,7 @@ import {
     };
     const LEGACY_STORAGE_KEY = 'agrilink-demo-v1';
 
+    const matchingEngine = window.CropLinkMatching;
     let data = { farmers: [], buyers: [] };
     let currentUser = null;
     let harvestChart = null;
@@ -90,36 +91,25 @@ import {
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
     }[char]));
 
-    function distanceBetween(firstKey, secondKey) {
-        const first = locations[firstKey];
-        const second = locations[secondKey];
-        if (!first || !second) return Infinity;
-        const toRadians = degrees => degrees * Math.PI / 180;
-        const latitudeDifference = toRadians(second.lat - first.lat);
-        const longitudeDifference = toRadians(second.lng - first.lng);
-        const value = Math.sin(latitudeDifference / 2) ** 2
-            + Math.cos(toRadians(first.lat)) * Math.cos(toRadians(second.lat))
-            * Math.sin(longitudeDifference / 2) ** 2;
-        return 6371 * 2 * Math.atan2(Math.sqrt(value), Math.sqrt(1 - value));
-    }
-
     function getMatches() {
         const matches = [];
-        for (const farmer of data.farmers) {
-            for (const buyer of data.buyers) {
-                if (farmer.product !== buyer.product || farmer.price > buyer.maxPrice) continue;
-                const distance = distanceBetween(farmer.location, buyer.location);
-                const priceFit = 100 - 50 * (farmer.price / buyer.maxPrice);
-                const distanceFit = Math.max(0, 100 * (1 - distance / 500));
-                const supplyCoverage = Math.min(1, farmer.quantity / buyer.quantity) * 100;
-                const score = Math.round(priceFit * 0.35 + distanceFit * 0.45 + supplyCoverage * 0.20);
+        for (const buyer of data.buyers) {
+            const rankedFarmers = matchingEngine.rankFarmers({
+                crop: buyer.product,
+                quantity: Number(buyer.quantity),
+                maxPrice: Number(buyer.maxPrice),
+                location: getLocationName(buyer.location)
+            }, data.farmers);
+
+            for (const ranked of rankedFarmers) {
                 matches.push({
-                    farmer,
+                    farmer: ranked.farmer,
                     buyer,
-                    distance,
-                    priceFit,
-                    supplyCoverage,
-                    score
+                    distance: ranked.km,
+                    priceFit: ranked.parts.priceScore * 100,
+                    supplyCoverage: ranked.parts.coverageScore * 100,
+                    score: Math.round(ranked.score * 100),
+                    reasons: ranked.reasons
                 });
             }
         }
@@ -539,6 +529,10 @@ import {
     }
 
     function render() {
+        if (!matchingEngine) {
+            showFirebaseNotice('The matching engine did not load. Check that matching.js is included before app.js on this page.');
+            return;
+        }
         const matches = getMatches();
         renderNavigationCounts();
         renderDashboard(matches);

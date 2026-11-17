@@ -24,7 +24,13 @@
     ['Kandy', 'Badulla', 125],
     ['Kurunegala', 'Anuradhapura', 95],
     ['Kandy', 'Anuradhapura', 140],
-    ['Anuradhapura', 'Jaffna', 200]
+    ['Anuradhapura', 'Jaffna', 200],
+    ['Colombo', 'Negombo', 35],
+    ['Kurunegala', 'Dambulla', 110],
+    ['Badulla', 'Ampara', 210],
+    ['Anuradhapura', 'Polonnaruwa', 110],
+    ['Kandy', 'Matale', 25],
+    ['Colombo', 'Ratnapura', 100]
   ];
 
   const WEIGHTS = { distance: 0.45, price: 0.35, coverage: 0.20 };

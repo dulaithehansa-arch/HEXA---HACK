@@ -9,6 +9,8 @@ assert.strictEqual(d['Jaffna'], 95 + 95 + 200);  // via Kurunegala-Anuradhapura 
 // Shortcut check: Gampaha->Kandy = min(30+115, 75+42)=117
 assert.strictEqual(M.shortestDistances(M.DEFAULT_GRAPH, 'Gampaha')['Kandy'], 117);
 assert.strictEqual(M.shortestDistances({A:{}}, 'Z')['A'], Infinity);
+['Dambulla', 'Ampara', 'Polonnaruwa', 'Matale', 'Negombo', 'Nuwara Eliya', 'Ratnapura']
+  .forEach(region => assert(M.REGIONS.includes(region), `${region} should be connected in the road graph`));
 
 const farmers = [
  {id:'f1',name:'Near',product:'Tomato',quantity:500,price:140,location:'Gampaha'},
