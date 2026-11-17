@@ -62,7 +62,7 @@ a { color: inherit; text-decoration: none; }
 .breadcrumb strong { color: #40534a; font-weight: 600; }
 .topbar-actions { display: flex; align-items: center; gap: 18px; }
 .status-pill { display: flex; align-items: center; gap: 7px; color: #6d7f75; font-size: 10px; }
-.status-pill i { width: 7px; height: 7px; border-radius: 50%; background: #21b779; box-shadow: 0 0 0 3px #e4f7ed; }
+.status-pill i { width: 7px; height: 7px; border-radius: 50%; background: #15966a; box-shadow: 0 0 0 3px #e4f7ed; }
 .icon-button { position: relative; border: 0; background: transparent; color: #74837b; font-size: 18px; }
 .icon-button b { position: absolute; top: 2px; right: 1px; width: 5px; height: 5px; border-radius: 50%; background: #f2a94a; }
 .page-content { max-width: 1440px; margin: 0 auto; padding: 31px 38px 26px; }

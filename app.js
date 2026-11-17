@@ -246,6 +246,8 @@ import {
             table.innerHTML = filtered.map(farmer => `<tr><td>${personCell(farmer.name, `Supplier · ${getLocationName(farmer.location)}`)}</td><td><span class="crop-tag">${escapeHtml(farmer.product)}</span></td><td><strong>${formatNumber(farmer.quantity)} kg</strong></td><td>${formatMoney(farmer.price)} / kg</td><td>${escapeHtml(getLocationName(farmer.location))}</td><td><span class="status-tag">Available</span></td></tr>`).join('');
             if (!filtered.length) table.innerHTML = `<tr><td colspan="6" class="empty-state">${search ? 'No farmers match your search.' : 'No farmers have been added.'}</td></tr>`;
         }
+        const resultCount = byId('farmerResultCount');
+        if (resultCount) resultCount.textContent = `Showing ${filtered.length} of ${data.farmers.length} farmers`;
         if (byId('farmersPageCount')) byId('farmersPageCount').textContent = data.farmers.length;
         if (byId('farmersPageSupply')) byId('farmersPageSupply').textContent = formatNumber(data.farmers.reduce((sum, farmer) => sum + Number(farmer.quantity), 0));
         if (byId('farmersCropCount')) byId('farmersCropCount').textContent = new Set(data.farmers.map(farmer => farmer.product)).size;
