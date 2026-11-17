@@ -1,7 +1,24 @@
+import { auth, db } from "./firebase-config.js";
+import {
+    onAuthStateChanged,
+    signInWithEmailAndPassword,
+    signOut
+} from "https://www.gstatic.com/firebasejs/13.4.0/firebase-auth.js";
+import {
+    addDoc,
+    collection,
+    doc,
+    getDocs,
+    onSnapshot,
+    query,
+    serverTimestamp,
+    where,
+    writeBatch
+} from "https://www.gstatic.com/firebasejs/13.4.0/firebase-firestore.js";
+
 (() => {
     'use strict';
 
-    const STORAGE_KEY = 'agrilink-demo-v1';
     const locations = {
         Dambulla: { lat: 7.87, lng: 80.65 },
         Anuradhapura: { lat: 8.31, lng: 80.40 },
@@ -56,30 +73,13 @@
             { id: 'b5', name: 'City Grocers', product: 'Onion', quantity: 2600, maxPrice: 195, location: 'Negombo' }
         ]
     };
+    const LEGACY_STORAGE_KEY = 'agrilink-demo-v1';
 
-    function cloneInitialData() {
-        return {
-            farmers: initialData.farmers.map(farmer => ({ ...farmer })),
-            buyers: initialData.buyers.map(buyer => ({ ...buyer }))
-        };
-    }
-
-    function loadData() {
-        try {
-            const saved = localStorage.getItem(STORAGE_KEY);
-            if (!saved) return cloneInitialData();
-            const parsed = JSON.parse(saved);
-            if (!Array.isArray(parsed.farmers) || !Array.isArray(parsed.buyers)) {
-                throw new Error('Saved demo data has an invalid shape.');
-            }
-            return parsed;
-        } catch (error) {
-            console.error('Unable to load CropLink demo data:', error);
-            return cloneInitialData();
-        }
-    }
-
-    let data = loadData();
+    let data = { farmers: [], buyers: [] };
+    let currentUser = null;
+    let harvestChart = null;
+    let unsubscribeFarmers = null;
+    let unsubscribeBuyers = null;
     const numberFormat = new Intl.NumberFormat('en-LK');
     const formatNumber = value => numberFormat.format(Math.round(value));
     const formatMoney = value => `₨ ${formatNumber(value)}`;
@@ -89,17 +89,6 @@
     const escapeHtml = value => String(value).replace(/[&<>"']/g, char => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
     }[char]));
-
-    function saveData() {
-        try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-        } catch (error) {
-            console.error('Unable to save CropLink demo data:', error);
-            window.alert('Your browser could not save the demo data. Check browser storage settings and try again.');
-            return false;
-        }
-        return true;
-    }
 
     function distanceBetween(firstKey, secondKey) {
         const first = locations[firstKey];
@@ -165,6 +154,22 @@
         return `<div class="score-cell"><span class="score-track"><span class="score-fill" style="width:${score}%"></span></span><span class="score-number">${score}%</span></div>`;
     }
 
+    function readLegacyData() {
+        try {
+            const saved = localStorage.getItem(LEGACY_STORAGE_KEY);
+            if (!saved) return null;
+            const parsed = JSON.parse(saved);
+            if (!Array.isArray(parsed.farmers) || !Array.isArray(parsed.buyers)) {
+                throw new Error('Saved browser data has an invalid shape.');
+            }
+            return parsed;
+        } catch (error) {
+            console.error('Unable to read existing browser data for migration:', error);
+            showFirebaseNotice(`Existing browser data could not be imported: ${error.message}`);
+            return null;
+        }
+    }
+
     function renderNavigationCounts() {
         const farmers = byId('farmersNavCount');
         const buyers = byId('buyersNavCount');
@@ -201,7 +206,8 @@
         const canvas = byId('harvestChart');
         if (canvas && window.Chart) {
             const context = canvas.getContext('2d');
-            new Chart(context, {
+            if (harvestChart) harvestChart.destroy();
+            harvestChart = new window.Chart(context, {
                 type: 'line',
                 data: {
                     labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
@@ -301,11 +307,10 @@
         });
     }
 
-    function addRecord(type, form) {
+    async function addRecord(type, form) {
         const formData = new FormData(form);
         const errorElement = byId(`${type}FormError`);
         const record = {
-            id: `${type === 'farmer' ? 'f' : 'b'}-${Date.now()}`,
             name: String(formData.get('name')).trim(),
             product: String(formData.get('product')),
             quantity: Number(formData.get('quantity')),
@@ -321,15 +326,188 @@
             return;
         }
 
-        data[type === 'farmer' ? 'farmers' : 'buyers'].push(record);
-        if (!saveData()) {
-            data[type === 'farmer' ? 'farmers' : 'buyers'].pop();
+        if (!currentUser) {
+            errorElement.textContent = 'Sign in before saving records.';
             return;
         }
-        errorElement.textContent = '';
-        form.reset();
-        form.closest('dialog').close();
-        render();
+
+        try {
+            const collectionName = type === 'farmer' ? 'farmers' : 'buyerRequests';
+            await addDoc(collection(db, collectionName), {
+                ...record,
+                ownerUid: currentUser.uid,
+                createdAt: serverTimestamp()
+            });
+            errorElement.textContent = '';
+            form.reset();
+            form.closest('dialog').close();
+        } catch (error) {
+            console.error(`Unable to save ${type} record:`, error);
+            errorElement.textContent = `Could not save this record: ${error.message}`;
+        }
+    }
+
+    async function seedCollectionIfEmpty(collectionName, records, user) {
+        const ownerQuery = query(
+            collection(db, collectionName),
+            where('ownerUid', '==', user.uid)
+        );
+        const existingRecords = await getDocs(ownerQuery);
+        if (!existingRecords.empty) return;
+
+        const batch = writeBatch(db);
+        records.forEach((record, index) => {
+            const { id, ...fields } = record;
+            batch.set(doc(db, collectionName, `sample-${user.uid}-${index + 1}`), {
+                ...fields,
+                ownerUid: user.uid,
+                createdAt: serverTimestamp()
+            });
+        });
+        await batch.commit();
+    }
+
+    async function seedDemoData(user) {
+        const legacyData = readLegacyData();
+        await seedCollectionIfEmpty('farmers', legacyData?.farmers || initialData.farmers, user);
+        await seedCollectionIfEmpty('buyerRequests', legacyData?.buyers || initialData.buyers, user);
+    }
+
+    function showFirebaseNotice(message) {
+        let notice = byId('firebaseNotice');
+        if (!notice) {
+            notice = document.createElement('p');
+            notice.id = 'firebaseNotice';
+            notice.className = 'firebase-notice';
+            document.querySelector('.page-content')?.prepend(notice);
+        }
+        if (notice) notice.textContent = message;
+    }
+
+    function stopRecordListeners() {
+        if (unsubscribeFarmers) unsubscribeFarmers();
+        if (unsubscribeBuyers) unsubscribeBuyers();
+        unsubscribeFarmers = null;
+        unsubscribeBuyers = null;
+        data = { farmers: [], buyers: [] };
+    }
+
+    function subscribeToRecords(user) {
+        const farmersQuery = query(
+            collection(db, 'farmers'),
+            where('ownerUid', '==', user.uid)
+        );
+        const buyersQuery = query(
+            collection(db, 'buyerRequests'),
+            where('ownerUid', '==', user.uid)
+        );
+
+        unsubscribeFarmers = onSnapshot(farmersQuery, snapshot => {
+            data.farmers = snapshot.docs.map(record => ({
+                ...record.data(),
+                id: record.id
+            }));
+            render();
+        }, error => {
+            console.error('Unable to load farmers from Firestore:', error);
+            showFirebaseNotice(`Could not load farmers: ${error.message}`);
+        });
+
+        unsubscribeBuyers = onSnapshot(buyersQuery, snapshot => {
+            data.buyers = snapshot.docs.map(record => ({
+                ...record.data(),
+                id: record.id
+            }));
+            render();
+        }, error => {
+            console.error('Unable to load buyer requests from Firestore:', error);
+            showFirebaseNotice(`Could not load buyer requests: ${error.message}`);
+        });
+    }
+
+    function setupAuthUI() {
+        const authGate = document.createElement('section');
+        authGate.id = 'authGate';
+        authGate.className = 'auth-gate';
+        authGate.innerHTML = `
+            <form id="authForm" class="auth-card">
+                <span class="brand-mark auth-logo">C</span>
+                <p class="eyebrow">CROPLINK COORDINATOR</p>
+                <h1>Sign in to your workspace</h1>
+                <p class="muted">Use the email and password created in Firebase Authentication.</p>
+                <label>Email address<input name="email" type="email" autocomplete="username" required></label>
+                <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+                <p id="authError" class="form-error" role="alert"></p>
+                <button class="button button-primary auth-submit" type="submit">Sign in</button>
+            </form>`;
+        document.body.append(authGate);
+
+        document.querySelectorAll('.topbar-actions').forEach(actions => {
+            const signOutButton = document.createElement('button');
+            signOutButton.id = 'signOutButton';
+            signOutButton.className = 'button button-quiet sign-out-button';
+            signOutButton.type = 'button';
+            signOutButton.textContent = 'Sign out';
+            actions.append(signOutButton);
+        });
+
+        byId('authForm').addEventListener('submit', async event => {
+            event.preventDefault();
+            const form = event.currentTarget;
+            const button = form.querySelector('button[type="submit"]');
+            const errorElement = byId('authError');
+            button.disabled = true;
+            errorElement.textContent = '';
+            try {
+                await signInWithEmailAndPassword(
+                    auth,
+                    String(new FormData(form).get('email')).trim(),
+                    String(new FormData(form).get('password'))
+                );
+                form.reset();
+            } catch (error) {
+                console.error('Firebase sign-in failed:', error);
+                errorElement.textContent = `Sign-in failed: ${error.message}`;
+            } finally {
+                button.disabled = false;
+            }
+        });
+
+        byId('signOutButton').addEventListener('click', async () => {
+            try {
+                await signOut(auth);
+            } catch (error) {
+                console.error('Firebase sign-out failed:', error);
+                showFirebaseNotice(`Could not sign out: ${error.message}`);
+            }
+        });
+    }
+
+    function startAuthListener() {
+        onAuthStateChanged(auth, async user => {
+            stopRecordListeners();
+            currentUser = user;
+            byId('authGate').hidden = Boolean(user);
+            const status = document.querySelector('.status-pill');
+
+            if (!user) {
+                if (status) status.innerHTML = '<i></i> Sign-in required';
+                render();
+                return;
+            }
+
+            if (status) status.innerHTML = '<i></i> Firebase connected';
+            try {
+                await seedDemoData(user);
+                subscribeToRecords(user);
+            } catch (error) {
+                console.error('Unable to initialize CropLink Firestore data:', error);
+                showFirebaseNotice(`Firestore setup failed: ${error.message}. Check that your Firestore rules allow this signed-in user.`);
+            }
+        }, error => {
+            console.error('Firebase authentication state failed:', error);
+            showFirebaseNotice(`Authentication error: ${error.message}`);
+        });
     }
 
     function bindEvents() {
@@ -370,5 +548,7 @@
 
     fillLocationSelects();
     bindEvents();
+    setupAuthUI();
     render();
+    startAuthListener();
 })();
